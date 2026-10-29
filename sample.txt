@@ -1,0 +1,4 @@
+int x;
+float total;
+int count = 10;
+int total = x + 10;
