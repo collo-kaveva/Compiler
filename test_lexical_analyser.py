@@ -15,15 +15,15 @@ class ValidInput(unittest.TestCase):
 
     def test_init_with_number(self):
         self.assertEqual(types("int count = 10;"),
-                         ["INT", "ID", "ASSIGN", "NUM", "SEMI", "EOF"])
+                         ["INT", "ID", "ASSIGN", "NUMBER", "SEMI", "EOF"])
 
     def test_init_with_expression(self):
         self.assertEqual(types("int total = x + 10;"),
-                         ["INT", "ID", "ASSIGN", "ID", "PLUS", "NUM", "SEMI", "EOF"])
+                         ["INT", "ID", "ASSIGN", "ID", "PLUS", "NUMBER", "SEMI", "EOF"])
 
     def test_no_spaces(self):
         self.assertEqual(types("int a=1+2;"),
-                         ["INT", "ID", "ASSIGN", "NUM", "PLUS", "NUM", "SEMI", "EOF"])
+                         ["INT", "ID", "ASSIGN", "NUMBER", "PLUS", "NUMBER", "SEMI", "EOF"])
 
     def test_keyword_vs_identifier(self):
         self.assertEqual(types("integer"), ["ID", "EOF"])
@@ -60,6 +60,11 @@ class InvalidInput(unittest.TestCase):
         with self.assertRaises(LexicalError):
             Lexer("int 1x;").tokenize()
 
+    def test_error_position(self):
+        with self.assertRaises(LexicalError) as ctx:
+            Lexer("int x;\nint y = 2 * 3;").tokenize()
+        self.assertEqual((ctx.exception.line, ctx.exception.column), (2, 11))
+
 
 class LexerDoesNotCheckSyntax(unittest.TestCase):
     """The lexer only produces tokens. Rejecting 'int x' is the parser's job."""
@@ -69,6 +74,11 @@ class LexerDoesNotCheckSyntax(unittest.TestCase):
 
     def test_bad_order_still_tokenizes(self):
         self.assertEqual(types("= x;"), ["ASSIGN", "ID", "SEMI", "EOF"])
+
+    def test_rule_violations_still_tokenize(self):
+        self.assertEqual(types("= x 10 ;"), ["ASSIGN", "ID", "NUMBER", "SEMI", "EOF"])
+        self.assertEqual(types("total price + tax ;"),
+                         ["ID", "ID", "PLUS", "ID", "SEMI", "EOF"])
 
 
 if __name__ == "__main__":

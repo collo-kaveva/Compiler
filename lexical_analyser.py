@@ -1,37 +1,52 @@
 """
-Lexical Analyser (Scanner) for a simple variable declaration language.
+Lexical Analyser (Scanner) for a small variable declaration language.
 
-Token set (the terminals of the grammar):
-    int  float  id  num  =  +  ;
-
-Grammar this scanner supports:
-    Decl → Type id Init ;
-    Type → int | float
-    Init → = Expr | ε
-    Expr → num | id + num
-
-The scanner is written as a hand-coded finite automaton: it reads one
-character at a time and decides which token is being formed.
+Design:
+    1. Grammar (see "Context Free Grammar.md"):
+           <program> → <decl> <program> | <decl>
+           <decl>    → <type> id <init> ;
+           <type>    → int | float
+           <init>    → = <expr> | ε
+           <expr>    → <expr> + <term> | <term>
+           <term>    → id | number
+    2. Tokens, one per terminal:  int  float  id  number  =  +  ;
+    3. Reserved keywords:  int  float
+    4. Regular expressions:  TOKEN_RULES, tried in order at each position
+    5. Invalid tokens raise a LexicalError with line and column
 
 Usage:
-    python lexical_analyser.py "int x = 10;"
-    python lexical_analyser.py -f sample.txt
+    uv run lexical_analyser.py "int x = 10;"
+    uv run lexical_analyser.py -f sample.txt
 """
 
+import re
 import sys
 from dataclasses import dataclass
 
 # Token types (one per terminal in the grammar)
 INT, FLOAT = "INT", "FLOAT"
-ID, NUM = "ID", "NUM"
+ID, NUMBER = "ID", "NUMBER"
 ASSIGN, PLUS, SEMI = "ASSIGN", "PLUS", "SEMI"
 EOF = "EOF"
 
-# Reserved keywords. These are never treated as identifiers.
+# Reserved keywords. They fit the ID pattern, so every ID lexeme is looked up here.
 KEYWORDS = {"int": INT, "float": FLOAT}
 
-# Single-character tokens
-SYMBOLS = {"=": ASSIGN, "+": PLUS, ";": SEMI}
+# Regular expression for each kind of lexeme. Order matters: the first match wins.
+TOKEN_RULES = [
+    ("NEWLINE", r"\n"),
+    ("SKIP", r"[ \t\r]+"),
+    ("BAD_NUMBER", r"[0-9]+[A-Za-z_][A-Za-z0-9_]*"),  # e.g. 12abc
+    (NUMBER, r"[0-9]+"),
+    (ID, r"[A-Za-z_][A-Za-z0-9_]*"),
+    (ASSIGN, r"="),
+    (PLUS, r"\+"),
+    (SEMI, r";"),
+    ("MISMATCH", r"."),
+]
+TOKEN_PATTERN = re.compile(
+    "|".join(f"(?P<{name}>{regex})" for name, regex in TOKEN_RULES)
+)
 
 
 class LexicalError(Exception):
@@ -59,63 +74,28 @@ class Lexer:
         self.src = source
         self.pos = 0
         self.line = 1
-        self.col = 1
+        self.line_start = 0
 
-    # ---- helpers -------------------------------------------------------
-    def _peek(self):
-        return self.src[self.pos] if self.pos < len(self.src) else ""
-
-    def _advance(self):
-        ch = self.src[self.pos]
-        self.pos += 1
-        if ch == "\n":
-            self.line += 1
-            self.col = 1
-        else:
-            self.col += 1
-        return ch
-
-    def _skip_whitespace(self):
-        while self._peek() and self._peek() in " \t\r\n":
-            self._advance()
-
-    # ---- token recognisers --------------------------------------------
-    def _identifier_or_keyword(self, line, col):
-        # State: first char is a letter or '_'.  Loop: letters, digits, '_'.
-        text = ""
-        while self._peek() and (self._peek().isalnum() or self._peek() == "_"):
-            text += self._advance()
-        return Token(KEYWORDS.get(text, ID), text, line, col)
-
-    def _number(self, line, col):
-        # State: first char is a digit.  Loop: more digits.
-        text = ""
-        while self._peek() and self._peek().isdigit():
-            text += self._advance()
-        # A number glued to letters (e.g. 12abc) is an invalid token.
-        if self._peek() and (self._peek().isalpha() or self._peek() == "_"):
-            while self._peek() and (self._peek().isalnum() or self._peek() == "_"):
-                text += self._advance()
-            raise LexicalError(f"invalid token '{text}'", line, col)
-        return Token(NUM, text, line, col)
-
-    # ---- main entry point ---------------------------------------------
     def next_token(self):
-        self._skip_whitespace()
-        line, col = self.line, self.col
-        ch = self._peek()
+        while self.pos < len(self.src):
+            match = TOKEN_PATTERN.match(self.src, self.pos)
+            kind, text = match.lastgroup, match.group()
+            col = self.pos - self.line_start + 1
+            self.pos = match.end()
 
-        if ch == "":
-            return Token(EOF, "", line, col)
-        if ch.isalpha() or ch == "_":
-            return self._identifier_or_keyword(line, col)
-        if ch.isdigit():
-            return self._number(line, col)
-        if ch in SYMBOLS:
-            self._advance()
-            return Token(SYMBOLS[ch], ch, line, col)
+            if kind == "NEWLINE":
+                self.line += 1
+                self.line_start = self.pos
+            elif kind == "BAD_NUMBER":
+                raise LexicalError(f"invalid token '{text}'", self.line, col)
+            elif kind == "MISMATCH":
+                raise LexicalError(f"unexpected character '{text}'", self.line, col)
+            elif kind == ID:
+                return Token(KEYWORDS.get(text, ID), text, self.line, col)
+            elif kind != "SKIP":
+                return Token(kind, text, self.line, col)
 
-        raise LexicalError(f"unexpected character '{ch}'", line, col)
+        return Token(EOF, "", self.line, self.pos - self.line_start + 1)
 
     def tokenize(self):
         """Return the full list of tokens, ending with an EOF token."""
@@ -127,19 +107,25 @@ class Lexer:
                 return tokens
 
 
+def read_source(args):
+    """Input text from the command line: a quoted string, or -f FILE."""
+    if args[0] != "-f":
+        return " ".join(args)
+    if len(args) < 2:
+        sys.exit("Error: -f needs a file name")
+    try:
+        with open(args[1], encoding="utf-8") as f:
+            return f.read()
+    except OSError as e:
+        sys.exit(f"Error: {e}")
+
+
 def main():
     args = sys.argv[1:]
     if not args:
         print(__doc__)
         return 1
-    if args[0] == "-f":
-        if len(args) < 2:
-            print("Error: -f needs a file name")
-            return 1
-        with open(args[1], encoding="utf-8") as f:
-            source = f.read()
-    else:
-        source = " ".join(args)
+    source = read_source(args)
 
     try:
         for tok in Lexer(source).tokenize():
